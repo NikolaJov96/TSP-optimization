@@ -1,14 +1,17 @@
 // g++ --std=c++11 optimize.cpp -o optimize.exe
+// gdb32 --args optimize.exe in.txt out.txt
 // optimize in.txt out.txt
 
 #include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,6 +32,10 @@ struct Solution
   }
 
   float calcCost() {
+    if (arr.size() == 0) 
+    {
+      return 0.0f;
+    }
     cost = 0.0f;
     for (int i = 0; i < arr.size() - 1; i++) {
       cost += sqrtf(
@@ -57,22 +64,33 @@ class Optimizer
 {
 public: 
 
-  Optimizer(): 
+  Optimizer(bool debug): 
     m_initialized(false),
     m_loops(600),
     m_populationSize(10000),
+    m_debug(debug),
     m_percToKeep(0.3),
+    m_percMutation(0.06),
+    m_numberOfMutations(8),
     m_totalTime(0),
     m_calcCostTime(0),
-    m_sortTime(0)
-
+    m_sortTime(0),
+    m_crossOverTime(0),
+    m_populationOld(new std::vector<Solution*>()),
+    m_populationNew(new std::vector<Solution*>())
   {
     m_rng.seed(std::random_device()());
+    m_rndSolution = std::uniform_int_distribution<std::mt19937::result_type>(0, m_populationSize * m_percToKeep - 1);
+    m_rndMutation = std::uniform_real_distribution<float>(0.0f, 1.0f);
   }
 
   ~Optimizer()
   {
-    for (Solution *s: m_population)
+    for (Solution *s: *m_populationOld)
+    {
+      delete s;
+    }
+    for (Solution *s: *m_populationNew)
     {
       delete s;
     }
@@ -110,11 +128,16 @@ public:
       return 2;
     }
     m_numberOfPoints = m_inData.arr.size();
+    m_bestSolution = m_inData;
     m_rndPoint = std::uniform_int_distribution<std::mt19937::result_type>(0, m_numberOfPoints - 1);
 
     for (int i = 0; i < m_populationSize; i++)
     {
-      m_population.push_back(new Solution());
+      m_populationOld->push_back(new Solution());
+    }
+    for (int i = 0; i < m_populationSize; i++)
+    {
+      m_populationNew->push_back(new Solution());
     }
     
     preaprePopulation();
@@ -135,7 +158,7 @@ public:
       int minCostId = -1;
       for (int i = 0; i < m_populationSize; i++)
       {
-        costs[i] = m_population[i]->calcCost();
+        costs[i] = (*m_populationOld)[i]->calcCost();
         if (minCostId < 0 || costs[i] < costs[minCostId])
         {
           minCostId = i;
@@ -143,30 +166,103 @@ public:
       }
 
       // check for end (store new best solution)
-      if (m_bestSolutionCost < 0.0f || costs[minCostId] < m_bestSolutionCost)
+      if (m_bestSolution.cost < 0.0f || costs[minCostId] < m_bestSolution.cost)
       {
         // shallow copy
-        m_bestSolution = *m_population[minCostId];
-        m_bestSolutionCost = costs[minCostId];
+        m_bestSolution = *(*m_populationOld)[minCostId];
       }
       m_calcCostTime += clock() - start;
 
       // slecetion
       start = clock();
-      std::sort(m_population.begin(), m_population.end(), 
+      std::sort(m_populationOld->begin(), m_populationOld->end(), 
         [](const Solution *s1, const Solution *s2) -> bool
         {
           return s1->cost > s2->cost;
         }
       );
-      m_sortTime = clock() - start;
+      m_sortTime += clock() - start;
 
       // cross-over
+      start = clock();
+      for (int i = 0; i < m_populationSize; i++)
+      {
+        Solution *solution = (*m_populationNew)[i];
+        solution->cost = -1.0f;
+
+        int intersectPoint = m_rndPoint(m_rng);
+        Solution *s1 = (*m_populationOld)[m_rndSolution(m_rng)];
+        Solution *s2 = (*m_populationOld)[m_rndSolution(m_rng)];
+
+        int ind;
+        while (ind < intersectPoint)
+        {
+          solution->arr[ind] = s1->arr[ind];
+          ind++;
+        }
+        for (int j = intersectPoint; j < m_numberOfPoints; j++)
+        {
+          if (std::find(solution->arr.begin(), solution->arr.end(), s2->arr[j]) == solution->arr.end())
+          {
+            solution->arr[ind++] = s2->arr[j];
+          }
+        }
+        for (int j = intersectPoint; ind < m_numberOfPoints; ind++)
+        {
+          if (std::find(solution->arr.begin(), solution->arr.end(), s2->arr[j]) == solution->arr.end())
+          {
+            solution->arr[ind++] = s2->arr[j];
+          }
+        }
+        if (int id = checkValid(solution))
+        {
+          std::cout << "cross-over error " << i << std::endl;
+          for (int j = 0; j < m_numberOfPoints; j++)
+          {
+            if (j == id)
+            {
+              std::cout << "error ";
+            }
+            std::cout << (*solution)[j]->x << " " << (*solution)[j]->y << std::endl;
+          }
+          exit(1);
+        }
+      }
+      m_crossOverTime += clock() - start;
 
       // mutation
+      start = clock();
+      for (Solution *s : *m_populationNew)
+      {
+        int mutations = m_rndMutation(m_rng) * m_numberOfMutations;
+        for (int i = 0; i < mutations; i++)
+        {
+          int id1 = m_rndPoint(m_rng);
+          int id2 = m_rndPoint(m_rng);
+          std::swap(s->arr[id1], s->arr[id2]);
+        }
+        if (int id = checkValid(s))
+        {
+          std::cout << "mutation error " << std::endl;
+          for (int j = 0; j < m_numberOfPoints; j++)
+          {
+            if (j == id)
+            {
+              std::cout << "error ";
+            }
+            std::cout << (*s)[j]->x << " " << (*s)[j]->y << std::endl;
+          }
+          exit(1);
+        }
+      }
+      m_mutationTime += clock() - start;
+
+      std::swap(m_populationOld, m_populationNew);
 
     }
     m_totalTime = clock() - globalStart;
+
+    dump();
   }
 
   float getInputCost()
@@ -179,29 +275,42 @@ public:
   }
 
   long getGlobalTime() { return m_totalTime; }
+  long getCalcCostTime() { return m_calcCostTime; }
+  long getSortTime() { return m_sortTime; }
+  long getCrossOverTime() { return m_crossOverTime; }
+  long getMutationTime() { return m_mutationTime; }
+
+  Solution &getBestSolution() { return m_bestSolution; }
 
 private:
   
   std::string m_inPath;
   std::string m_outPath;
   Solution m_inData;
-  std::vector<Solution*> m_population;
+  std::vector<Solution*>* m_populationOld;
+  std::vector<Solution*>* m_populationNew;
 
   Solution m_bestSolution;
-  float m_bestSolutionCost = -1.0f;
 
   std::mt19937 m_rng;
   std::uniform_int_distribution<std::mt19937::result_type> m_rndPoint;
+  std::uniform_int_distribution<std::mt19937::result_type> m_rndSolution;
+  std::uniform_real_distribution<float> m_rndMutation;
 
   long m_totalTime;
   long m_calcCostTime;
   long m_sortTime;
+  long m_crossOverTime;
+  long m_mutationTime;
 
   bool m_initialized;
 
   int m_loops;
   int m_populationSize;
   float m_percToKeep;
+  float m_percMutation;
+  int m_numberOfMutations;
+  bool m_debug;
   int m_numberOfPoints;
 
   void preaprePopulation()
@@ -209,14 +318,62 @@ private:
     for (int i = 0; i < m_populationSize; i++)
     {
       for (int j = 0; j < m_numberOfPoints; j++) {
-        m_population[i]->arr.push_back(m_inData[j]);
+        (*m_populationOld)[i]->arr.push_back(m_inData[j]);
+        (*m_populationNew)[i]->arr.push_back(m_inData[j]);
       }
-      m_population[i]->calcCost();
+      (*m_populationOld)[i]->calcCost();
       for (int j = 0; j < m_numberOfPoints; j++) 
       {
-        std::swap((*m_population[i])[j], (*m_population[i])[m_rndPoint(m_rng)]);
+        std::swap((*(*m_populationOld)[i])[j], (*(*m_populationOld)[i])[m_rndPoint(m_rng)]);
+      }
+      if (int id = checkValid((*m_populationOld)[i]))
+      {
+        std::cout << "preparation error " << i << std::endl;
+        for (int j = 0; j < m_numberOfPoints; j++)
+        {
+          if (j == id)
+          {
+            std::cout << "error ";
+          }
+          std::cout << (*(*m_populationOld)[i])[j]->x << " " << (*(*m_populationOld)[i])[j]->y << std::endl;
+        }
+        exit(1);
       }
     }
+  }
+
+  int checkValid(Solution* s)
+  {
+    if (!m_debug) 
+    {
+      return 0;
+    }
+    std::unordered_set<Point*> used;
+    for (int i = 0; i < m_numberOfPoints; i++) 
+    {
+      if (used.find(s->arr[i]) != used.end())
+      {
+        return i;
+      }
+      used.insert(s->arr[i]);
+    }
+    return 0;
+  }
+
+  bool dump()
+  {
+    std::ofstream outFile(m_outPath.c_str());
+    if (!outFile.is_open())
+    {
+      return false;
+    }
+    outFile << m_bestSolution.cost << std::endl;
+    for (Point *p: m_bestSolution.arr)
+    {
+      outFile << p->x << " " << p->y << std::endl;
+    }
+    outFile.close();
+    return true;
   }
 
 };
@@ -241,7 +398,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   
-  Optimizer *optimizer = new Optimizer();
+  Optimizer *optimizer = new Optimizer(false);
   if (int err = optimizer->init(inPath, outPath))
   {
     switch(err)
@@ -260,6 +417,15 @@ int main(int argc, char *argv[]) {
   std::cout << "Initial cost: " << optimizer->getInputCost() << std::endl;
   
   optimizer->optimize();
+
+  std::cout << "Accumulated time: " << optimizer->getGlobalTime() / 1000.0f << std::endl;
+  std::cout << "Calc cost time: " << optimizer->getCalcCostTime() / 1000.0f << std::endl;
+  std::cout << "Sorting time: " << optimizer->getSortTime() / 1000.0f << std::endl;
+  std::cout << "Cross-over time: " << optimizer->getCrossOverTime() / 1000.0f << std::endl;
+  std::cout << "Mutation time: " << optimizer->getMutationTime() / 1000.0f << std::endl;
+
+  Solution &bestSolution = optimizer->getBestSolution();
+  std::cout << "Best solution cost: " << bestSolution.cost << std::endl;
 
   delete optimizer;
   std::cout << "End" << std::endl;
