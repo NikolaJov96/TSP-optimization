@@ -66,7 +66,7 @@ public:
 
   Optimizer(bool debug): 
     m_initialized(false),
-    m_loops(600),
+    m_loops(6000),
     m_populationSize(10000),
     m_debug(debug),
     m_percToKeep(0.3),
@@ -76,8 +76,7 @@ public:
     m_calcCostTime(0),
     m_sortTime(0),
     m_crossOverTime(0),
-    m_populationOld(new std::vector<Solution*>()),
-    m_populationNew(new std::vector<Solution*>())
+    m_populationOld(new std::vector<Solution*>())
   {
     m_rng.seed(std::random_device()());
     m_rndSolution = std::uniform_int_distribution<std::mt19937::result_type>(0, m_populationSize * m_percToKeep - 1);
@@ -87,10 +86,6 @@ public:
   ~Optimizer()
   {
     for (Solution *s: *m_populationOld)
-    {
-      delete s;
-    }
-    for (Solution *s: *m_populationNew)
     {
       delete s;
     }
@@ -135,10 +130,6 @@ public:
     {
       m_populationOld->push_back(new Solution());
     }
-    for (int i = 0; i < m_populationSize; i++)
-    {
-      m_populationNew->push_back(new Solution());
-    }
     
     preaprePopulation();
 
@@ -153,6 +144,14 @@ public:
     std::vector<float> costs(m_populationSize);
     for (int loop = 0; loop < m_loops; loop++)
     {
+      if (loop % (m_loops * 5 / 100) == 0)
+      {
+        std::cout << loop * 100 / m_loops << "% \n";
+        for (int i = 0; i < 30; i++)
+        {
+          std::cout << (*m_populationOld)[i]->cost << " ";
+        }
+      }
       // calc all coasts
       start = clock();
       int minCostId = -1;
@@ -170,6 +169,7 @@ public:
       {
         // shallow copy
         m_bestSolution = *(*m_populationOld)[minCostId];
+        std::cout << std::endl << costs[minCostId] << std::endl;
       }
       m_calcCostTime += clock() - start;
 
@@ -178,17 +178,21 @@ public:
       std::sort(m_populationOld->begin(), m_populationOld->end(), 
         [](const Solution *s1, const Solution *s2) -> bool
         {
-          return s1->cost > s2->cost;
+          return s1->cost < s2->cost;
         }
       );
+      // for (int i = 0; i < 4; i++)
+      // {
+      //   std::cout << (*m_populationOld)[i]->cost << " ";
+      // }
+      // std::cout << std::endl;
       m_sortTime += clock() - start;
 
       // cross-over
       start = clock();
-      for (int i = 0; i < m_populationSize; i++)
+      for (int i = 3; i < m_populationSize; i++)
       {
-        Solution *solution = (*m_populationNew)[i];
-        solution->cost = -1.0f;
+        Solution *solution = (*m_populationOld)[i];
 
         int intersectPoint = m_rndPoint(m_rng);
         Solution *s1 = (*m_populationOld)[m_rndSolution(m_rng)];
@@ -232,13 +236,19 @@ public:
 
       // mutation
       start = clock();
-      for (Solution *s : *m_populationNew)
+      // m_populationSize * m_percToKeep
+      for (int i = 3; i < m_populationSize; i++)
       {
+        Solution *s = (*m_populationOld)[i];
         int mutations = m_rndMutation(m_rng) * m_numberOfMutations;
         for (int i = 0; i < mutations; i++)
         {
           int id1 = m_rndPoint(m_rng);
-          int id2 = m_rndPoint(m_rng);
+          int id2 = id1 + 1;
+          if (id2 == m_numberOfPoints)
+          {
+            id2 -= 2;
+          }
           std::swap(s->arr[id1], s->arr[id2]);
         }
         if (int id = checkValid(s))
@@ -256,9 +266,6 @@ public:
         }
       }
       m_mutationTime += clock() - start;
-
-      std::swap(m_populationOld, m_populationNew);
-
     }
     m_totalTime = clock() - globalStart;
 
@@ -288,7 +295,6 @@ private:
   std::string m_outPath;
   Solution m_inData;
   std::vector<Solution*>* m_populationOld;
-  std::vector<Solution*>* m_populationNew;
 
   Solution m_bestSolution;
 
@@ -319,9 +325,11 @@ private:
     {
       for (int j = 0; j < m_numberOfPoints; j++) {
         (*m_populationOld)[i]->arr.push_back(m_inData[j]);
-        (*m_populationNew)[i]->arr.push_back(m_inData[j]);
       }
-      (*m_populationOld)[i]->calcCost();
+      if (i < 10)
+      {
+        continue;
+      }
       for (int j = 0; j < m_numberOfPoints; j++) 
       {
         std::swap((*(*m_populationOld)[i])[j], (*(*m_populationOld)[i])[m_rndPoint(m_rng)]);
