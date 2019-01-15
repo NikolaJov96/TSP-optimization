@@ -1,4 +1,4 @@
-// g++ --std=c++11 optimize.cpp -o optimize.exe
+// g++ -O2 --std=c++11 optimize.cpp -o optimize.exe
 // gdb32 --args optimize.exe in.txt out.txt
 // optimize in.txt out.txt
 
