@@ -20,6 +20,7 @@ struct Point
 {
   float x;
   float y;
+  int id;
 };
 
 struct Solution
@@ -67,12 +68,12 @@ public:
 
   Optimizer(bool debug): 
     m_initialized(false),
-    m_loops(100),
-    m_populationSize(60000),
+    m_loops(600),
+    m_populationSize(6000),
     m_debug(debug),
-    m_percToKeep(0.2),
+    m_percToKeep(0.3),
     m_percMutation(0.06),
-    m_numberOfMutations(2),
+    m_numberOfMutations(11),
     m_totalTime(0),
     m_calcCostTime(0),
     m_sortTime(0),
@@ -80,7 +81,7 @@ public:
     m_populationOld(new std::vector<Solution*>()),
     m_populationNew(new std::vector<Solution*>())
   {
-    m_rng.seed(std::random_device()());
+    m_rng.seed(time(nullptr));
     m_rndSolution = std::uniform_int_distribution<std::mt19937::result_type>(0, m_populationSize * m_percToKeep - 1);
     m_rndMutation = std::uniform_real_distribution<float>(0.0f, 1.0f);
   }
@@ -119,10 +120,9 @@ public:
       {
         std::stringstream inStream(line);
         Point *point = new Point();
-        m_pointIdMap[point] = ind;
+        point->id = ind++;
         inStream >> point->x >> point->y;
         m_inData.arr.push_back(point);
-        ind++;
       }
       m_inData.calcCost();
       inFile.close();
@@ -154,7 +154,7 @@ public:
 
   void optimize()
   {
-    clock_t globalStart = clock();
+    globalStart = clock();
     clock_t start;
     std::vector<float> costs(m_populationSize);
     for (int loop = 0; loop < m_loops; loop++)
@@ -162,13 +162,16 @@ public:
       if (loop % (m_loops * 5 / 100) == 0)
       {
         std::cout << loop * 100 / m_loops << "% \n";
-        for (int i = 0; i < 20; i++)
+        if (m_debug)
         {
-          std::cout << (*m_populationOld)[i]->cost << " ";
-        }
-        for (int i = 20; i > 0; i--)
-        {
-          std::cout << (*m_populationOld)[m_percToKeep * m_populationSize - i]->cost << " ";
+          for (int i = 0; i < 20; i++)
+          {
+            std::cout << (*m_populationOld)[i]->cost << " ";
+          }
+          for (int i = 20; i > 0; i--)
+          {
+            std::cout << (*m_populationOld)[m_percToKeep * m_populationSize - i]->cost << " ";
+          }
         }
       }
       // calc all coasts
@@ -188,7 +191,8 @@ public:
       {
         // shallow copy
         m_bestSolution = *(*m_populationOld)[minCostId];
-        std::cout << std::endl << costs[minCostId] << std::endl;
+        dump();
+        std::cout << costs[minCostId] << std::endl;
       }
       m_calcCostTime += clock() - start;
 
@@ -200,11 +204,6 @@ public:
           return s1->cost < s2->cost;
         }
       );
-      // for (int i = 0; i < 4; i++)
-      // {
-      //   std::cout << (*m_populationOld)[i]->cost << " ";
-      // }
-      // std::cout << std::endl;
       m_sortTime += clock() - start;
 
       // cross-over
@@ -221,28 +220,27 @@ public:
 
         int ind = 0;
         int sel = 0;
-        clearVisited();
+        //clearVisited();
+        bool *visited = new bool[m_numberOfPoints]{ false };
+        int streak = 0;
+        float crossOvewScale = 0.1f + m_rndMutation(m_rng) * 0.7f;
+        int streakMin = 1 + m_rndMutation(m_rng) * 2;
         while (ind < m_numberOfPoints)
         {
-          if (m_rndMutation(m_rng) < 0.8f) { sel = (sel + 1) % 2; }
-          if (sInd[sel] == m_numberOfPoints) { sel = (sel + 1) % 2; }
-          if (sInd[sel] >= m_numberOfPoints) 
+          if (streak > streakMin) 
           {
-            std::cout << "asdf" << std::endl;
-            exit(1);
+            if (m_rndMutation(m_rng) < crossOvewScale) { sel = (sel + 1) % 2; streak = 0; }
+            if (sInd[sel] == m_numberOfPoints) { sel = (sel + 1) % 2; streak = 0; }
           }
-          auto it = m_pointIdMap.find(s[sel]->arr[sInd[sel]]);
-          if (it == m_pointIdMap.end()) {
-            std::cout << "error" << std::endl;
-            exit(1);
-          }
-          if (!m_visited[it->second])
+          streak++;
+          if (!visited[s[sel]->arr[sInd[sel]]->id])
           {
             solution->arr[ind++] = s[sel]->arr[sInd[sel]];
-            m_visited[it->second] = true;
+            visited[s[sel]->arr[sInd[sel]]->id] = true;
           }
           sInd[sel]++;
         }
+        delete [] visited;
         if (int id = checkValid(solution))
         {
           std::cout << "cross-over error " << i << std::endl;
@@ -268,11 +266,7 @@ public:
         for (int i = 0; i < mutations; i++)
         {
           int id1 = m_rndPoint(m_rng);
-          int id2 = id1 + 1;
-          if (id2 == m_numberOfPoints)
-          {
-            id2 -= 2;
-          }
+          int id2 = (id1 + 1) % m_numberOfPoints;
           std::swap(s->arr[id1], s->arr[id2]);
         }
         if (int id = checkValid(s))
@@ -291,11 +285,11 @@ public:
       }
       m_mutationTime += clock() - start;
 
+      *(*m_populationNew)[0] = *(*m_populationOld)[0];
+
       std::swap(m_populationOld, m_populationNew);
     }
     m_totalTime = clock() - globalStart;
-
-    dump();
   }
 
   float getInputCost()
@@ -322,7 +316,6 @@ private:
   Solution m_inData;
   std::vector<Solution*>* m_populationOld;
   std::vector<Solution*>* m_populationNew;
-  std::unordered_map<Point*, int> m_pointIdMap;
   std::vector<bool> m_visited;
 
   Solution m_bestSolution;
@@ -332,6 +325,7 @@ private:
   std::uniform_int_distribution<std::mt19937::result_type> m_rndSolution;
   std::uniform_real_distribution<float> m_rndMutation;
 
+  clock_t globalStart;
   long m_totalTime;
   long m_calcCostTime;
   long m_sortTime;
@@ -356,10 +350,10 @@ private:
         (*m_populationOld)[i]->arr.push_back(m_inData[j]);
         (*m_populationNew)[i]->arr.push_back(m_inData[j]);
       }
-      if (i < 1)
-      {
-        continue;
-      }
+      // if (i < 1)
+      // {
+      //   continue;
+      // }
       for (int j = 0; j < m_numberOfPoints; j++) 
       {
         std::swap((*(*m_populationOld)[i])[j], (*(*m_populationOld)[i])[m_rndPoint(m_rng)]);
@@ -406,6 +400,7 @@ private:
       return false;
     }
     outFile << m_bestSolution.cost << std::endl;
+    outFile << 1.0f * (clock() - globalStart) / CLOCKS_PER_SEC << std::endl;
     for (Point *p: m_bestSolution.arr)
     {
       outFile << p->x << " " << p->y << std::endl;
