@@ -11,6 +11,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -66,17 +67,18 @@ public:
 
   Optimizer(bool debug): 
     m_initialized(false),
-    m_loops(6000),
-    m_populationSize(10000),
+    m_loops(100),
+    m_populationSize(60000),
     m_debug(debug),
-    m_percToKeep(0.3),
+    m_percToKeep(0.2),
     m_percMutation(0.06),
-    m_numberOfMutations(8),
+    m_numberOfMutations(2),
     m_totalTime(0),
     m_calcCostTime(0),
     m_sortTime(0),
     m_crossOverTime(0),
-    m_populationOld(new std::vector<Solution*>())
+    m_populationOld(new std::vector<Solution*>()),
+    m_populationNew(new std::vector<Solution*>())
   {
     m_rng.seed(std::random_device()());
     m_rndSolution = std::uniform_int_distribution<std::mt19937::result_type>(0, m_populationSize * m_percToKeep - 1);
@@ -86,6 +88,10 @@ public:
   ~Optimizer()
   {
     for (Solution *s: *m_populationOld)
+    {
+      delete s;
+    }
+    for (Solution *s: *m_populationNew)
     {
       delete s;
     }
@@ -108,12 +114,15 @@ public:
     std::ifstream inFile(inPath.c_str());
     if (inFile.is_open())
     {
+      int ind = 0;
       while (getline(inFile, line))
       {
         std::stringstream inStream(line);
         Point *point = new Point();
+        m_pointIdMap[point] = ind;
         inStream >> point->x >> point->y;
         m_inData.arr.push_back(point);
+        ind++;
       }
       m_inData.calcCost();
       inFile.close();
@@ -129,6 +138,12 @@ public:
     for (int i = 0; i < m_populationSize; i++)
     {
       m_populationOld->push_back(new Solution());
+      m_populationNew->push_back(new Solution());
+    }
+
+    for (int i = 0; i < m_numberOfPoints; i++)
+    {
+      m_visited.push_back(false);
     }
     
     preaprePopulation();
@@ -147,9 +162,13 @@ public:
       if (loop % (m_loops * 5 / 100) == 0)
       {
         std::cout << loop * 100 / m_loops << "% \n";
-        for (int i = 0; i < 30; i++)
+        for (int i = 0; i < 20; i++)
         {
           std::cout << (*m_populationOld)[i]->cost << " ";
+        }
+        for (int i = 20; i > 0; i--)
+        {
+          std::cout << (*m_populationOld)[m_percToKeep * m_populationSize - i]->cost << " ";
         }
       }
       // calc all coasts
@@ -190,33 +209,39 @@ public:
 
       // cross-over
       start = clock();
-      for (int i = 3; i < m_populationSize; i++)
+      for (int i = 0; i < m_populationSize; i++)
       {
-        Solution *solution = (*m_populationOld)[i];
+        Solution *solution = (*m_populationNew)[i];
 
-        int intersectPoint = m_rndPoint(m_rng);
-        Solution *s1 = (*m_populationOld)[m_rndSolution(m_rng)];
-        Solution *s2 = (*m_populationOld)[m_rndSolution(m_rng)];
+        Solution *s[] = { 
+          (*m_populationOld)[m_rndSolution(m_rng)], 
+          (*m_populationOld)[m_rndSolution(m_rng)]
+        };
+        int sInd[] = { 0, 0 };
 
-        int ind;
-        while (ind < intersectPoint)
+        int ind = 0;
+        int sel = 0;
+        clearVisited();
+        while (ind < m_numberOfPoints)
         {
-          solution->arr[ind] = s1->arr[ind];
-          ind++;
-        }
-        for (int j = intersectPoint; j < m_numberOfPoints; j++)
-        {
-          if (std::find(solution->arr.begin(), solution->arr.end(), s2->arr[j]) == solution->arr.end())
+          if (m_rndMutation(m_rng) < 0.8f) { sel = (sel + 1) % 2; }
+          if (sInd[sel] == m_numberOfPoints) { sel = (sel + 1) % 2; }
+          if (sInd[sel] >= m_numberOfPoints) 
           {
-            solution->arr[ind++] = s2->arr[j];
+            std::cout << "asdf" << std::endl;
+            exit(1);
           }
-        }
-        for (int j = intersectPoint; ind < m_numberOfPoints; ind++)
-        {
-          if (std::find(solution->arr.begin(), solution->arr.end(), s2->arr[j]) == solution->arr.end())
+          auto it = m_pointIdMap.find(s[sel]->arr[sInd[sel]]);
+          if (it == m_pointIdMap.end()) {
+            std::cout << "error" << std::endl;
+            exit(1);
+          }
+          if (!m_visited[it->second])
           {
-            solution->arr[ind++] = s2->arr[j];
+            solution->arr[ind++] = s[sel]->arr[sInd[sel]];
+            m_visited[it->second] = true;
           }
+          sInd[sel]++;
         }
         if (int id = checkValid(solution))
         {
@@ -236,10 +261,9 @@ public:
 
       // mutation
       start = clock();
-      // m_populationSize * m_percToKeep
-      for (int i = 3; i < m_populationSize; i++)
+      for (int i = 0; i < m_populationSize; i++)
       {
-        Solution *s = (*m_populationOld)[i];
+        Solution *s = (*m_populationNew)[i];
         int mutations = m_rndMutation(m_rng) * m_numberOfMutations;
         for (int i = 0; i < mutations; i++)
         {
@@ -266,6 +290,8 @@ public:
         }
       }
       m_mutationTime += clock() - start;
+
+      std::swap(m_populationOld, m_populationNew);
     }
     m_totalTime = clock() - globalStart;
 
@@ -295,6 +321,9 @@ private:
   std::string m_outPath;
   Solution m_inData;
   std::vector<Solution*>* m_populationOld;
+  std::vector<Solution*>* m_populationNew;
+  std::unordered_map<Point*, int> m_pointIdMap;
+  std::vector<bool> m_visited;
 
   Solution m_bestSolution;
 
@@ -325,8 +354,9 @@ private:
     {
       for (int j = 0; j < m_numberOfPoints; j++) {
         (*m_populationOld)[i]->arr.push_back(m_inData[j]);
+        (*m_populationNew)[i]->arr.push_back(m_inData[j]);
       }
-      if (i < 10)
+      if (i < 1)
       {
         continue;
       }
@@ -382,6 +412,13 @@ private:
     }
     outFile.close();
     return true;
+  }
+
+  void clearVisited() {
+    for (int i = 0; i < m_numberOfPoints; i++)
+    {
+      m_visited[i] = false;
+    }
   }
 
 };
